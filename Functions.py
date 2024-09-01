@@ -1,6 +1,6 @@
 #Functions to insert data into the database based on the season and the team.
-from nba_api.stats.endpoints import shotchartdetail, leaguegamelog, commonplayerinfo,leaguedashplayerbiostats
-from nba_api.stats.static import teams, players
+from nba_api.stats.endpoints import shotchartdetail, leaguegamelog, leaguedashplayerbiostats
+from nba_api.stats.static import teams
 import pandas as pd
 
 

@@ -1,3 +1,5 @@
+CREATE TABLE data AS
+
 SELECT
 		p.player_name
 		,t.full_name as team_name
