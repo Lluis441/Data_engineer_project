@@ -2,7 +2,9 @@
 from nba_api.stats.endpoints import shotchartdetail, leaguegamelog, leaguedashplayerbiostats
 from nba_api.stats.static import teams
 import pandas as pd
+import requests
 
+## NBA PROJECT
 
 def create_table_from_dataframe(df, table_name, conn, primary_keys=None, foreign_keys=None):
     cursor = conn.cursor()
@@ -199,3 +201,62 @@ def ETL_data_teams_logos(table_name, conn, primary_keys=None, foreign_keys=None)
     insert_data_from_dataframe(df, table_name, conn)
 
     print(f"Data has been inserted into the {table_name} table")
+
+
+## WC PROJECT
+
+def download_events_and_filter_shots(match_id):
+    events_url = f'https://raw.githubusercontent.com/statsbomb/open-data/master/data/events/{match_id}.json'
+    response = requests.get(events_url)
+    
+    if response.status_code == 200:
+        events_data = response.json()
+        
+        # Filter for only "Shot" events
+        shot_events = [event for event in events_data if event['type']['name'] == 'Shot']
+        return shot_events
+    else:
+        print(f"Failed to download events for match {match_id}. Status code: {response.status_code}")
+        return []
+    
+
+def ETL_matches_and_events_statsbomb(client,database_name,matches_table_name,events_table_name, competition_id, season_id):
+
+    db = client[{database_name}]
+    matches_collection = db[{matches_table_name}]
+    events_collection = db[{events_table_name}]
+
+
+    # Download World Cup 2022 matches JSON data directly
+    matches_url = f'https://raw.githubusercontent.com/statsbomb/open-data/master/data/matches/{competition_id}/{season_id}.json'
+        
+
+    response = requests.get(matches_url)
+    if response.status_code == 200:
+        matches_data = response.json()  # This is the raw JSON data
+        matches_collection.insert_many(matches_data)  # Insert directly into MongoDB
+        print(f"Inserted {len(matches_data)} matches into MongoDB.")
+
+        # Extract match_ids from the matches data
+        match_ids = [match['match_id'] for match in matches_data]
+
+        all_shots = []
+        for match_id in match_ids:
+            shots = download_events_and_filter_shots(match_id)
+            all_shots.extend(shots)
+            print(f"Inserted {len(shots)} shot events for {match_id} into MongoDB.")
+
+        # Insert all shot events into MongoDB
+        if all_shots:
+            events_collection.insert_many(all_shots)
+            print(f"Inserted {len(all_shots)} shot events into MongoDB.")
+
+
+
+    else:
+        print(f"Failed to download JSONS. Status code: {response.status_code}")
+
+
+
+    # Close the MongoDB connection
+    client.close()
