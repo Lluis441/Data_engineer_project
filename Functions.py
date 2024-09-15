@@ -205,58 +205,170 @@ def ETL_data_teams_logos(table_name, conn, primary_keys=None, foreign_keys=None)
 
 ## WC PROJECT
 
-def download_events_and_filter_shots(match_id):
+def download_events_and_filter(match_id, event_type):
     events_url = f'https://raw.githubusercontent.com/statsbomb/open-data/master/data/events/{match_id}.json'
     response = requests.get(events_url)
     
     if response.status_code == 200:
         events_data = response.json()
         
-        # Filter for only "Shot" events
-        shot_events = [event for event in events_data if event['type']['name'] == 'Shot']
-        return shot_events
+        # Filter for only the specified event type
+        events_type = [event for event in events_data if event['type']['name'] == event_type]
+        return events_type
     else:
         print(f"Failed to download events for match {match_id}. Status code: {response.status_code}")
         return []
+
+def process_events_for_match(match_id, event_type, events_collection):
+    events = download_events_and_filter(match_id, event_type)
     
+    if events:
+        # Add the match_id to each event
+        for event in events:
+            event['match_id'] = match_id
 
-def ETL_matches_and_events_statsbomb(client,database_name,matches_table_name,events_table_name, competition_id, season_id):
+        # Get a list of all event_ids for the current match
+        event_ids = [event['id'] for event in events]
+        
+        # Fetch existing events in bulk
+        existing_event_ids = events_collection.find({'id': {'$in': event_ids}}, {'id': 1})
+        existing_event_ids = {event['id'] for event in existing_event_ids}
+        
+        # Filter out events that are already in the database
+        new_events = [event for event in events if event['id'] not in existing_event_ids]
 
-    db = client[{database_name}]
-    matches_collection = db[{matches_table_name}]
-    events_collection = db[{events_table_name}]
+        # Insert new events in bulk
+        if new_events:
+            events_collection.insert_many(new_events)
+            print(f"Inserted {len(new_events)} new {event_type} events for match {match_id} into MongoDB.")
+        else:
+            print(f"No new {event_type} events for match {match_id}.")
+    else:
+        print(f"No {event_type} events found for match {match_id}.")
 
+def ETL_matches_and_event_statsbomb(client, database_name, matches_table_name, events_table_name, event_type, competition_id, season_id, match_id=None):
+
+    db = client[database_name]
+    matches_collection = db[matches_table_name]
+    events_collection = db[events_table_name]
 
     # Download World Cup 2022 matches JSON data directly
     matches_url = f'https://raw.githubusercontent.com/statsbomb/open-data/master/data/matches/{competition_id}/{season_id}.json'
+    
+    response = requests.get(matches_url)
+
+    if response.status_code == 200:
+        matches_data = response.json()
+
+        if match_id is not None:
+            # Check if the specific match already exists in the database
+            existing_match = matches_collection.find_one({'match_id': match_id})
+            
+            if existing_match:
+                print(f"Match {match_id} already exists in MongoDB, skipping insertion in {matches_table_name}")
+
+                process_events_for_match(match_id, event_type, events_collection)
+            else:
+                # Filter for the specific match
+                filtered_match = next((match for match in matches_data if match['match_id'] == match_id), None)
+                if filtered_match:
+                    matches_collection.insert_one(filtered_match)
+                    print(f"Inserted match {match_id} into MongoDB.")
+
+                # Process events for the specific match
+                process_events_for_match(match_id, event_type, events_collection)
+
+        else:
+            # Extract all match_ids from the downloaded matches
+            match_ids = [match['match_id'] for match in matches_data]
+
+            # Find all matches that already exist in the database
+            existing_matches = matches_collection.find({'match_id': {'$in': match_ids}}, {'match_id': 1})
+
+            # Get the match_ids of existing matches
+            existing_match_ids = {match['match_id'] for match in existing_matches}
+
+            # Filter out matches that are already in the database
+            new_matches = [match for match in matches_data if match['match_id'] not in existing_match_ids]
+
+            if new_matches:
+                # Insert all new matches in a single bulk operation
+                matches_collection.insert_many(new_matches)
+                print(f"Inserted {len(new_matches)} new matches into MongoDB.")
+            else:
+                print("No new matches to insert.")
+                return
+            
+            # Process events for each match
+            for match_id in [match['match_id'] for match in new_matches]:
+                process_events_for_match(match_id, event_type, events_collection)
+
+    else:
+        print(f"Failed to download matches. Status code: {response.status_code}")
+
+
+'''
+def ETL_event_statsbomb(client,database_name,events_table_name, match_id, event_type):
+
+    db = client[database_name]
+    events_collection = db[events_table_name]
+
+    events = download_events_and_filter(match_id,event_type)
+
+    if events:
+        # Get a list of all event_ids for the current match
+        event_ids = [event['id'] for event in events]
         
+        # Fetch existing events in bulk
+        existing_event_ids = events_collection.find({'id': {'$in': event_ids}}, {'id': 1})
+        existing_event_ids = {event['id'] for event in existing_event_ids}
+        
+        # Filter out events that are already in the database
+        new_events = [event for event in events if event['id'] not in existing_event_ids]
+
+        # Insert new events in bulk
+        if new_events:
+            events_collection.insert_many(new_events)
+            print(f"Inserted {len(new_events)} new {event_type} events for match {match_id} into MongoDB.")
+        else:
+            print(f"No new {event_type} events for match {match_id}.")
+    else:
+        print(f"No {event_type} events found for match {match_id}.")
+
+
+
+def ETL_matches_statsbomb(client, database_name, matches_table_name, competition_id, season_id):
+
+    db = client[database_name]
+    matches_collection = db[matches_table_name]
+
+    # Download World Cup 2022 matches JSON data directly
+    matches_url = f'https://raw.githubusercontent.com/statsbomb/open-data/master/data/matches/{competition_id}/{season_id}.json'
 
     response = requests.get(matches_url)
     if response.status_code == 200:
         matches_data = response.json()  # This is the raw JSON data
-        matches_collection.insert_many(matches_data)  # Insert directly into MongoDB
-        print(f"Inserted {len(matches_data)} matches into MongoDB.")
 
-        # Extract match_ids from the matches data
+        # Extract all match_ids from the downloaded matches
         match_ids = [match['match_id'] for match in matches_data]
 
-        all_shots = []
-        for match_id in match_ids:
-            shots = download_events_and_filter_shots(match_id)
-            all_shots.extend(shots)
-            print(f"Inserted {len(shots)} shot events for {match_id} into MongoDB.")
+        # Find all matches that already exist in the database
+        existing_matches = matches_collection.find({'match_id': {'$in': match_ids}}, {'match_id': 1})
 
-        # Insert all shot events into MongoDB
-        if all_shots:
-            events_collection.insert_many(all_shots)
-            print(f"Inserted {len(all_shots)} shot events into MongoDB.")
+        # Get the match_ids of existing matches
+        existing_match_ids = {match['match_id'] for match in existing_matches}
 
+        # Filter out matches that are already in the database
+        new_matches = [match for match in matches_data if match['match_id'] not in existing_match_ids]
 
+        if new_matches:
+            # Insert all new matches in a single bulk operation
+            matches_collection.insert_many(new_matches)
+            print(f"Inserted {len(new_matches)} new matches into MongoDB.")
+        else:
+            print("No new matches to insert.")
 
     else:
-        print(f"Failed to download JSONS. Status code: {response.status_code}")
+        print(f"Failed to download matches. Status code: {response.status_code}")
 
-
-
-    # Close the MongoDB connection
-    client.close()
+'''
