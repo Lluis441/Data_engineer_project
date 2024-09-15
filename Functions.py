@@ -6,37 +6,63 @@ import requests
 
 ## NBA PROJECT
 
-def create_table_from_dataframe(df, table_name, conn, primary_keys=None, foreign_keys=None):
+def create_update_table_from_dataframe(df, table_name, conn, primary_keys=None, foreign_keys=None):
     cursor = conn.cursor()
-    
-    # Create SQL command to create table with primary keys
-    columns = ', '.join([f"{col.replace(' ', '_').lower()} {get_sql_type(df[col])}" for col in df.columns])
-    
-    create_table_sql = f"""
-    CREATE TABLE IF NOT EXISTS {table_name} (
-        {columns}
-    """
-    
-    # Add PRIMARY KEY clause if primary keys are provided
-    if primary_keys:
-        primary_keys_str = ', '.join([key.replace(' ', '_').lower() for key in primary_keys])
-        create_table_sql += f""",
-        PRIMARY KEY ({primary_keys_str})
-        """
-    
-    # Add FOREIGN KEY clauses if foreign keys are provided
-    if foreign_keys:
-        for fk in foreign_keys:
-            create_table_sql += f""",
-            FOREIGN KEY ({fk['column'].replace(' ', '_').lower()})
-            REFERENCES {fk['references_table']}({fk['references_column'].replace(' ', '_').lower()})
-            ON DELETE {fk.get('on_delete', 'NO ACTION')}
-            """
-    
-    create_table_sql += ");"
 
-    cursor.execute(create_table_sql)
-    conn.commit()
+    # Check if the table exists
+    cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}';")
+    table_exists = cursor.fetchone() is not None
+    new_columns=[]
+
+    if not table_exists:
+        # Create SQL command to create table with primary keys
+        columns = ', '.join([f"{col.replace(' ', '_').lower()} {get_sql_type(df[col])}" for col in df.columns])
+        
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            {columns}
+        """
+        
+        # Add PRIMARY KEY clause if primary keys are provided
+        if primary_keys:
+            primary_keys_str = ', '.join(primary_keys)
+            create_table_sql += f""",
+            PRIMARY KEY ({primary_keys_str})
+            """
+        
+        # Add FOREIGN KEY clauses if foreign keys are provided
+        if foreign_keys:
+            for fk in foreign_keys:
+                create_table_sql += f""",
+                FOREIGN KEY ({fk['column'].replace(' ', '_').lower()})
+                REFERENCES {fk['references_table']}({fk['references_column'].replace(' ', '_').lower()})
+                ON DELETE {fk.get('on_delete', 'NO ACTION')}
+                """
+        
+        create_table_sql += ");"
+
+        cursor.execute(create_table_sql)
+        conn.commit()
+        print(f"Table '{table_name}' created.")
+
+    else:
+        # If the table exists, check for new columns and alter the table if needed
+        cursor.execute(f"PRAGMA table_info({table_name});")
+        existing_columns = [row[1].lower() for row in cursor.fetchall()]
+        for col in df.columns:
+            col_name = col.replace(' ', '_').lower()
+            if col_name not in existing_columns:
+                # Add new column to the table
+                column_type = get_sql_type(df[col])
+                alter_table_sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {column_type};"
+                new_columns.append(col_name)
+                try:
+                    cursor.execute(alter_table_sql)
+                    conn.commit()
+                    print(f"Column '{col_name}' added to table '{table_name}'.")
+                except Exception as e:
+                    print(f"Error adding column '{col_name}' to table '{table_name}': {e}")
+    return new_columns
 
 def get_sql_type(col):
     if pd.api.types.is_integer_dtype(col):
@@ -49,15 +75,64 @@ def get_sql_type(col):
         return "TEXT"
 
 
-def insert_data_from_dataframe(df, table_name, conn):
+def insert_data_from_dataframe(df, table_name, conn, primary_keys, new_columns):
     cursor = conn.cursor()
+
     # Generar la sentencia SQL para la inserción de datos
     placeholders = ', '.join(['?'] * len(df.columns))
     columns= ', '.join(df.columns)
-    insert_sql = f"INSERT OR IGNORE INTO {table_name} ({columns}) VALUES ({placeholders})"
+   
+    if primary_keys:
+        if new_columns:
+            # Construct update statement for non-primary key columns
+            update_columns = ', '.join([f"{col} = excluded.{col}" for col in new_columns if col not in primary_keys])
 
-    cursor.executemany(insert_sql, df.values.tolist())
-    conn.commit()
+
+            insert_sql = f"""
+            INSERT INTO {table_name} ({columns})
+            VALUES ({placeholders})
+            ON CONFLICT ({', '.join(primary_keys)})
+            DO UPDATE SET {update_columns};   
+            """ # Only updates when a conflict occurs with a primary key
+        else:
+            # If no new columns, only insert or ignore conflicts
+            insert_sql = f"""
+            INSERT INTO {table_name} ({columns})
+            VALUES ({placeholders})
+            ON CONFLICT ({', '.join(primary_keys)})
+            DO NOTHING;
+            """
+
+        cursor.executemany(insert_sql, df.values.tolist())
+        conn.commit()
+
+        affected_rows = cursor.rowcount
+
+        print(f"Attempted to insert {len(df)} rows. Inserted/Updated {affected_rows} rows into {table_name}.")
+    
+    else:
+        insert_sql = f"""
+        INSERT OR IGNORE INTO {table_name} ({columns})
+        VALUES ({placeholders});
+        """
+
+        cursor.executemany(insert_sql, df.values.tolist())
+        conn.commit()
+
+        inserted_rows = cursor.rowcount
+
+        print(f"Attempted to insert {len(df)} rows. Inserted {inserted_rows} rows into {table_name}.")
+    
+    
+
+
+
+def calculate_points_per_shot(row):
+    if "3" in row['SHOT_ZONE_BASIC']:
+        return 3
+    else:
+        return 2
+
 
 
 def ETL_data_team_shots(team_name, table_name, season, conn, context_measure, primary_keys=None, foreign_keys=None):
@@ -76,13 +151,18 @@ def ETL_data_team_shots(team_name, table_name, season, conn, context_measure, pr
     # Convertir los resultados a un DataFrame de pandas
     df = response.get_data_frames()[0]
 
+    # Add points_per_shot field based on shot_base_zone
+    df['points_per_shot']=df.apply(calculate_points_per_shot, axis=1)
+
     # Crear la tabla basada en los campos del DataFrame
-    create_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
+    new_columns=create_update_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
 
     # Insertar los datos en la tabla
-    insert_data_from_dataframe(df, table_name, conn)
+    insert_data_from_dataframe(df, table_name, conn, primary_keys, new_columns)
 
-    print(f"Data has been inserted into the {table_name} table for the team {team_name} in the {season} season.")
+    print(f"ETL ended: {table_name} table for the team {team_name} in the {season} season.")
+
+
 
 
 def ETL_data_shots(table_name, season, conn, context_measure, primary_keys=None, foreign_keys=None):
@@ -98,13 +178,16 @@ def ETL_data_shots(table_name, season, conn, context_measure, primary_keys=None,
     # Convertir los resultados a un DataFrame de pandas
     df = response.get_data_frames()[0]
 
+    # Add points_per_shot field based on shot_base_zone
+    #df['points_per_shot']=df.apply(calculate_points_per_shot, axis=1)
+
     # Crear la tabla basada en los campos del DataFrame
-    create_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
+    new_columns=create_update_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
 
     # Insertar los datos en la tabla
-    insert_data_from_dataframe(df, table_name, conn)
+    insert_data_from_dataframe(df, table_name, conn, primary_keys, new_columns)
 
-    print(f"Data has been inserted into the {table_name} table for the {season} season.")
+    print(f"ETL ended: {table_name} table for the {season} season.")
 
 def ETL_data_teams(table_name, conn, primary_keys=None, foreign_keys=None):
     
@@ -114,13 +197,13 @@ def ETL_data_teams(table_name, conn, primary_keys=None, foreign_keys=None):
     # Convertir los resultados a un DataFrame de pandas
     df = pd.DataFrame(response)
 
-    # Crear la tabla basada en los campos del DataFrame
-    create_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
+     # Crear la tabla basada en los campos del DataFrame
+    new_columns=create_update_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
 
     # Insertar los datos en la tabla
-    insert_data_from_dataframe(df, table_name, conn)
+    insert_data_from_dataframe(df, table_name, conn, primary_keys, new_columns)
 
-    print(f"Data has been inserted into the {table_name} table")
+    print(f"ETL ended: {table_name} table")
 
 def ETL_data_games(table_name, season, conn, primary_keys=None, foreign_keys=None):
     
@@ -131,12 +214,12 @@ def ETL_data_games(table_name, season, conn, primary_keys=None, foreign_keys=Non
     df = response.get_data_frames()[0]
 
     # Crear la tabla basada en los campos del DataFrame
-    create_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
+    new_columns=create_update_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
 
     # Insertar los datos en la tabla
-    insert_data_from_dataframe(df, table_name, conn)
+    insert_data_from_dataframe(df, table_name, conn, primary_keys, new_columns)
 
-    print(f"Data has been inserted into the {table_name} table for the {season} season.")
+    print(f"ETL ended: {table_name} table for the {season} season.")
 
 
 def ETL_data_players_season(table_name, season, conn, primary_keys=None, foreign_keys=None):
@@ -148,12 +231,12 @@ def ETL_data_players_season(table_name, season, conn, primary_keys=None, foreign
     df = response.get_data_frames()[0]
 
     # Crear la tabla basada en los campos del DataFrame
-    create_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
+    new_columns=create_update_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
 
     # Insertar los datos en la tabla
-    insert_data_from_dataframe(df, table_name, conn)
+    insert_data_from_dataframe(df, table_name, conn, primary_keys, new_columns)
 
-    print(f"Data has been inserted into the {table_name} table")
+    print(f"ETL ended: {table_name} table")
 
 def construct_photo_url(player_id):
     base_url = "https://cdn.nba.com/headshots/nba/latest/1040x760/"
@@ -169,13 +252,13 @@ def ETL_data_players_season_image(table_name, season, conn, primary_keys=None, f
 
     df=df[['PLAYER_ID','photo_url']]
 
-     # Crear la tabla basada en los campos del DataFrame
-    create_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
+    # Crear la tabla basada en los campos del DataFrame
+    new_columns=create_update_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
 
     # Insertar los datos en la tabla
-    insert_data_from_dataframe(df, table_name, conn)
+    insert_data_from_dataframe(df, table_name, conn, primary_keys, new_columns)
 
-    print(f"Data has been inserted into the {table_name} table")
+    print(f"ETL ended: {table_name} table")
 
 
 def construct_logo_url(team_id, logo_type='primary', size='L'):
@@ -194,13 +277,13 @@ def ETL_data_teams_logos(table_name, conn, primary_keys=None, foreign_keys=None)
 
     df=df[['id','primary_logo_url','secondary_logo_url', 'alt_logo_url']]
 
-     # Crear la tabla basada en los campos del DataFrame
-    create_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
+    # Crear la tabla basada en los campos del DataFrame
+    new_columns=create_update_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)
 
     # Insertar los datos en la tabla
-    insert_data_from_dataframe(df, table_name, conn)
+    insert_data_from_dataframe(df, table_name, conn, primary_keys, new_columns)
 
-    print(f"Data has been inserted into the {table_name} table")
+    print(f"ETL ended: {table_name} table")
 
 
 ## WC PROJECT
@@ -227,6 +310,24 @@ def process_events_for_match(match_id, event_type, events_collection):
         for event in events:
             event['match_id'] = match_id
 
+            # Transform the location field from [x, y] to {'x': x_value, 'y': y_value}
+            if 'location' in event and isinstance(event['location'], list) and len(event['location']) == 2:
+                event['location'] = {'x': event['location'][0], 'y': event['location'][1]}
+                #print(f"Transformed location: {event['location']}")
+            
+            # Check for nested fields like 'shot', 'pass', etc., and transform 'end_location' inside them
+            nested_fields = ['shot', 'pass', 'carry'] # Checked in the Statsbomb documentation 
+            for field in nested_fields:
+                if field in event and 'end_location' in event[field] and isinstance(event[field]['end_location'], list):
+                    # Handle end_location with either 2 or 3 elements
+                    if len(event[field]['end_location']) == 2:
+                        event[field]['end_location'] = {'x': event[field]['end_location'][0], 'y': event[field]['end_location'][1]}
+                    elif len(event[field]['end_location']) == 3:
+                        event[field]['end_location'] = {'x': event[field]['end_location'][0], 'y': event[field]['end_location'][1], 'z': event[field]['end_location'][2]}
+
+                    #print(f"Transformed {field} end_location: {event[field]['end_location']}")
+
+
         # Get a list of all event_ids for the current match
         event_ids = [event['id'] for event in events]
         
@@ -236,6 +337,8 @@ def process_events_for_match(match_id, event_type, events_collection):
         
         # Filter out events that are already in the database
         new_events = [event for event in events if event['id'] not in existing_event_ids]
+
+        #print(new_events)
 
         # Insert new events in bulk
         if new_events:

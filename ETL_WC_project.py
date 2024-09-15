@@ -13,7 +13,7 @@ season_id = 106 #2022
 event_type = 'Shot'
 
 
-ETL_matches_and_event_statsbomb(client,database_name,matches_table_name,events_table_name, event_type, competition_id, season_id, match_id=3857256)
+ETL_matches_and_event_statsbomb(client,database_name,matches_table_name,events_table_name, event_type, competition_id, season_id, match_id=None)
 
 #ETL_matches_statsbomb(client, database_name, matches_table_name, competition_id, season_id)
 
