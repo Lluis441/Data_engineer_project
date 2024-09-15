@@ -179,7 +179,7 @@ def ETL_data_shots(table_name, season, conn, context_measure, primary_keys=None,
     df = response.get_data_frames()[0]
 
     # Add points_per_shot field based on shot_base_zone
-    #df['points_per_shot']=df.apply(calculate_points_per_shot, axis=1)
+    df['points_per_shot']=df.apply(calculate_points_per_shot, axis=1)
 
     # Crear la tabla basada en los campos del DataFrame
     new_columns=create_update_table_from_dataframe(df, table_name , conn, primary_keys, foreign_keys)

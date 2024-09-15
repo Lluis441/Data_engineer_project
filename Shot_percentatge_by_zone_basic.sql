@@ -8,6 +8,7 @@ SELECT
 		, count(*)  as shot_attempts
 		,SUM(CASE WHEN shot_made_flag = 1 THEN 1 ELSE 0 END) AS shots_made
 		,SUM(CASE WHEN shot_made_flag = 1 THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS shooting_percentage
+		,s.points_per_shot as points_per_shot
 		,pp.photo_url as player_photo
 		,tl.primary_logo_url as team_logo
 	
