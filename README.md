@@ -49,8 +49,12 @@ https://public.tableau.com/app/profile/llu.s.vega.roman/viz/ShootingPercentatgea
 
 ## Future Work
 Expand Analysis: 
-Explore the nba_api and it's possibilities, with more seasons, more players... a lot of info to look and dive into.
+Explore the nba_api and statsbomb open_data and their possibilities, with more seasons, more players... a lot of info to look and dive into.
 Automate ETL Pipeline: 
-Automate the extraction and loading of NBA data to keep the database up-to-date, as well as perform some more transformations to improve data quality and integration while also improving efficency and performance of the database.
+Automate the extraction and loading of NBA data to keep the database up-to-date, as well as perform some more transformations to build additional layers of data quality and validation can be crucial to ensure the accuracy and reliability of the processed data, especially if more data sources are added to the project, while also improving efficency and performance of the databases.
+Cloud:
+Deploying the pipelines on cloud infrastructure will increase accessibility across teams, improve security and performance, and enable dynamic scaling during live games to control costs.
+Rela_time data:
+To implement real-time data ingestion, tools like Kafka should be considered.
 Improve Visualizations: 
 Explore additional Tableau visualizations (or other tools as Power BI, Qlik..) to present more complex and meaningful insights.
