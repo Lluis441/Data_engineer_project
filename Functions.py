@@ -301,6 +301,14 @@ def download_events_and_filter(match_id, event_type):
     else:
         print(f"Failed to download events for match {match_id}. Status code: {response.status_code}")
         return []
+    
+
+def validate_location(x, y, event_id):
+    if not (0 <= x <= 120):
+        print(f"Warning: Invalid x coordinate ({x}) for event {event_id}. It should be between 0 and 120.")
+    if not (0 <= y <= 80):
+        print(f"Warning: Invalid y coordinate ({y}) for event {event_id}. It should be between 0 and 80.")
+
 
 def process_events_for_match(match_id, event_type, events_collection):
     events = download_events_and_filter(match_id, event_type)
@@ -312,6 +320,10 @@ def process_events_for_match(match_id, event_type, events_collection):
 
             # Transform the location field from [x, y] to {'x': x_value, 'y': y_value}
             if 'location' in event and isinstance(event['location'], list) and len(event['location']) == 2:
+                # Perform data quality check on location
+                x_value, y_value = event['location'][0], event['location'][1]
+                validate_location(x_value, y_value, event['id'])
+                
                 event['location'] = {'x': event['location'][0], 'y': event['location'][1]}
                 #print(f"Transformed location: {event['location']}")
             
